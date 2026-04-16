@@ -16,6 +16,7 @@ class LyricPlayer:
         self.last_frame = "" 
         self.start_time_offset = 0.0 
         self.total_duration = 0.0
+        self.is_paused = False
         
         # Get total duration for the progress bar
         if os.path.exists(self.music_path):
@@ -41,8 +42,12 @@ class LyricPlayer:
         hide_cursor()
 
         try:
-            while pygame.mixer.music.get_busy() or pygame.mixer.music.get_pos() != -1:
+            # Main playback loop
+            while pygame.mixer.music.get_busy() or self.is_paused or pygame.mixer.music.get_pos() != -1:
                 self._handle_input()
+                
+                # Calculate current time based on play head + manual offset
+                # get_pos resets to 0 when unpaused or after seeking (play(start=...))
                 current_time = self.start_time_offset + (pygame.mixer.music.get_pos() / 1000.0)
                 
                 if current_time >= 0:
@@ -60,7 +65,22 @@ class LyricPlayer:
         """Non-blocking check for keyboard input (Windows only)."""
         if msvcrt.kbhit():
             key = msvcrt.getch()
-            if key in (b'\x00', b'\xe0'):
+            # Handle standard keys
+            if key == b' ': # Space to toggle pause
+                if self.is_paused:
+                    pygame.mixer.music.unpause()
+                    self.is_paused = False
+                else:
+                    pygame.mixer.music.pause()
+                    self.is_paused = True
+            elif key in (b'r', b'R'): # R to restart
+                self._seek(-self.total_duration) # Seek to start
+                if self.is_paused:
+                    pygame.mixer.music.unpause()
+                    self.is_paused = False
+
+            # Handling special keys (Arrow keys)
+            elif key in (b'\x00', b'\xe0'):
                 sub_key = msvcrt.getch()
                 if sub_key == b'K': # Left Arrow
                     self._seek(-CONFIG.SEEK_SECONDS)
@@ -75,6 +95,7 @@ class LyricPlayer:
         self.start_time_offset = new_pos
         pygame.mixer.music.play(start=new_pos)
         
+        # Reset state for correct redraw
         self.last_frame = ""
         self.current_sub_idx = 0
 

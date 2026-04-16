@@ -32,8 +32,8 @@ class Settings:
     # Thresholds
     BRK_MAX_GAP = 0.5       
     BRK_MAX_LINE_LEN = 50   
-    BRK_MIN_LINE_LEN = 10   # Avoid breaking tiny lines (unless huge gap)
-    BRK_CAPS_GAP_MIN = 0.1  # Min gap required for a Capital word to trigger break
+    BRK_MIN_LINE_LEN = 0   # Avoid breaking tiny lines (unless huge gap)
+    BRK_CAPS_GAP_MIN = 0  # Min gap required for a Capital word to trigger break
     
     # Proper Nouns / Excluded words 
     # (Words in this list will NEVER trigger a line break even if capitalized)
