@@ -42,7 +42,7 @@ def parse_srt(file_path):
 
 def parse_json(file_path):
     """
-    Parse word-level JSON lyrics and group them into lines.
+    Parse word-level JSON lyrics and group them into lines intelligently.
     """
     if not os.path.exists(file_path):
         return []
@@ -61,10 +61,14 @@ def parse_json(file_path):
     current_line_words = []
     
     # Heuristics for grouping words into lines
-    max_gap = 0.8 # seconds
-    max_len = 60  # characters
+    max_gap = 0.5 # Reduced from 0.8 for better sensitivity
+    max_len = 50  # Reduced from 60 for better readability in terminal
 
     for i, word_info in enumerate(words):
+        word_text = word_info.get('word', '').strip()
+        if not word_text:
+            continue
+
         if not current_line_words:
             current_line_words.append(word_info)
             continue
@@ -74,8 +78,21 @@ def parse_json(file_path):
         
         current_text = ' '.join([w['word'] for w in current_line_words])
         
-        # New line triggers
-        if gap > max_gap or len(current_text) + len(word_info['word']) + 1 > max_len:
+        # New line triggers:
+        # 1. Significant timing gap
+        # 2. Line is too long
+        # 3. Word starts with uppercase and there's at least a small gap (indicating start of a new phrase)
+        is_capitalized = word_text[0].isupper()
+        ends_with_punctuation = last_word.get('word', '').strip()[-1] in ('.', '!', '?')
+        
+        should_break = (
+            gap > max_gap or 
+            len(current_text) + len(word_text) + 1 > max_len or
+            (is_capitalized and gap > 0.1 and len(current_text) > 10) or
+            ends_with_punctuation
+        )
+
+        if should_break:
             # Save current line
             lines.append({
                 'start': current_line_words[0]['start'],
