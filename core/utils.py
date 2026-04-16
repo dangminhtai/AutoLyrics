@@ -27,6 +27,25 @@ def show_cursor():
     sys.stdout.write('\033[?25h')
     sys.stdout.flush()
 
+import shutil
+import re
+from wcwidth import wcswidth
+
 def move_to_top():
     """Move cursor to top-left of the terminal."""
     sys.stdout.write('\033[H')
+
+def strip_ansi(text):
+    """Remove ANSI escape sequences from a string."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+def get_visible_width(text):
+    """Get the actual display width of a string, accounting for Unicode and ignoring ANSI codes."""
+    clean_text = strip_ansi(text)
+    width = wcswidth(clean_text)
+    return width if width >= 0 else len(clean_text)
+
+def get_terminal_width():
+    """Return the current terminal width."""
+    return shutil.get_terminal_size().columns

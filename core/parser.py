@@ -1,11 +1,11 @@
 import os
 import json
 from .utils import to_seconds
+from .config import CONFIG
 
 def parse_srt(file_path):
     """
     Parse an SRT file into a list of subtitle dictionaries.
-    Each dict contains 'start', 'end', and 'text'.
     """
     if not os.path.exists(file_path):
         return []
@@ -14,7 +14,7 @@ def parse_srt(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
     except Exception as e:
-        print(f"Lỗi khi đọc file: {e}")
+        print(f"{CONFIG.COLOR_ERROR}Lỗi khi đọc file srt: {e}")
         return []
 
     blocks = content.strip().split('\n\n')
@@ -33,16 +33,15 @@ def parse_srt(file_path):
                         'start': to_seconds(start_str),
                         'end': to_seconds(end_str),
                         'text': text,
-                        'words': [] # No word level info in SRT
+                        'words': [] 
                     })
                 except Exception:
                     continue
-
     return subtitles
 
 def parse_json(file_path):
     """
-    Parse word-level JSON lyrics and group them into lines intelligently.
+    Parse word-level JSON lyrics and group them using advanced configuration rules.
     """
     if not os.path.exists(file_path):
         return []
@@ -51,7 +50,7 @@ def parse_json(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             words = json.load(f)
     except Exception as e:
-        print(f"Lỗi khi đọc file JSON: {e}")
+        print(f"{CONFIG.COLOR_ERROR}Lỗi khi đọc file JSON: {e}")
         return []
 
     if not words:
@@ -60,10 +59,6 @@ def parse_json(file_path):
     lines = []
     current_line_words = []
     
-    # Heuristics for grouping words into lines
-    max_gap = 0.5 # Reduced from 0.8 for better sensitivity
-    max_len = 50  # Reduced from 60 for better readability in terminal
-
     for i, word_info in enumerate(words):
         word_text = word_info.get('word', '').strip()
         if not word_text:
@@ -73,30 +68,37 @@ def parse_json(file_path):
             current_line_words.append(word_info)
             continue
         
-        last_word = current_line_words[-1]
-        gap = word_info['start'] - last_word['end']
-        
+        last_word_info = current_line_words[-1]
+        last_word_text = last_word_info.get('word', '').strip()
+        gap = word_info['start'] - last_word_info['end']
         current_text = ' '.join([w['word'] for w in current_line_words])
         
-        # New line triggers:
-        # 1. Significant timing gap
-        # 2. Line is too long
-        # 3. Word starts with uppercase and there's at least a small gap (indicating start of a new phrase)
-        is_capitalized = word_text[0].isupper()
-        ends_with_punctuation = last_word.get('word', '').strip()[-1] in ('.', '!', '?')
+        # New line triggers
+        should_break = False
         
-        should_break = (
-            gap > max_gap or 
-            len(current_text) + len(word_text) + 1 > max_len or
-            (is_capitalized and gap > 0.1 and len(current_text) > 10) or
-            ends_with_punctuation
-        )
+        # 1. Gap threshold (if enabled)
+        if CONFIG.USE_GAP_RULE and gap > CONFIG.BRK_MAX_GAP:
+            should_break = True
+            
+        # 2. Length threshold (if enabled)
+        elif CONFIG.USE_LEN_RULE and len(current_text) + len(word_text) + 1 > CONFIG.BRK_MAX_LINE_LEN:
+            should_break = True
+            
+        # 3. Capitalization rule (if enabled)
+        elif CONFIG.BRK_ON_CAPS and word_text[0].isupper():
+            if word_text not in CONFIG.EXCLUDED_FROM_BREAK:
+                if gap >= CONFIG.BRK_CAPS_GAP_MIN and len(current_text) >= CONFIG.BRK_MIN_LINE_LEN:
+                    should_break = True
+        
+        # 4. Punctuation rule (if enabled)
+        elif CONFIG.BRK_ON_PUNCTUATION:
+            if last_word_text and last_word_text[-1] in CONFIG.PUNCTUATION_MARKS:
+                should_break = True
 
         if should_break:
-            # Save current line
             lines.append({
                 'start': current_line_words[0]['start'],
-                'end': last_word['end'],
+                'end': last_word_info['end'],
                 'text': current_text,
                 'words': current_line_words
             })
@@ -115,11 +117,12 @@ def parse_json(file_path):
         
     return lines
 
-def load_lyrics(file_path):
+def load_lyrics(file_path=None):
     """
-    Generic lyric loader based on file extension.
+    Generic lyric loader based on file extension. Uses CONFIG path by default.
     """
-    _, ext = os.path.splitext(file_path)
+    path = file_path if file_path else CONFIG.LYRICS_PATH
+    _, ext = os.path.splitext(path)
     if ext.lower() == '.json':
-        return parse_json(file_path)
-    return parse_srt(file_path)
+        return parse_json(path)
+    return parse_srt(path)
