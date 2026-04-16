@@ -5,13 +5,16 @@ import os
 from colorama import Fore, Style
 from .utils import clear_screen, hide_cursor, show_cursor, move_to_top
 
+import msvcrt
+
 class LyricPlayer:
     def __init__(self, music_path, subtitles):
         self.music_path = music_path
         self.subtitles = subtitles
         self.current_sub_idx = 0
         self.window_size = 5
-        self.last_frame = "" # For dirty checking
+        self.last_frame = "" 
+        self.start_time_offset = 0.0 # Tracking position for seeking
 
     def play(self):
         """Start the music and the lyric rendering loop."""
@@ -27,20 +30,47 @@ class LyricPlayer:
         hide_cursor()
 
         try:
-            while pygame.mixer.music.get_busy():
-                # get_pos is more reliable for staying in sync with audio
-                current_time = pygame.mixer.music.get_pos() / 1000.0
+            while pygame.mixer.music.get_busy() or pygame.mixer.music.get_pos() != -1:
+                # Handle arrow keys
+                self._handle_input()
+
+                # current_time = start_pos + elapsed_time
+                current_time = self.start_time_offset + (pygame.mixer.music.get_pos() / 1000.0)
                 
                 if current_time >= 0:
                     self._render_frame(current_time)
                 
-                time.sleep(0.01) # Faster update loop
+                time.sleep(0.01)
         except KeyboardInterrupt:
             pygame.mixer.music.stop()
         finally:
             show_cursor()
             clear_screen()
             print(Fore.RED + "Đã dừng.")
+
+    def _handle_input(self):
+        """Non-blocking check for keyboard input (Windows only)."""
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            # On Windows, arrow keys send a special sequence (0 or 224 followed by code)
+            if key in (b'\x00', b'\xe0'):
+                sub_key = msvcrt.getch()
+                if sub_key == b'K': # Left Arrow
+                    self._seek(-5)
+                elif sub_key == b'M': # Right Arrow
+                    self._seek(5)
+
+    def _seek(self, seconds):
+        """Jump forward or backward in the song."""
+        current_pos = self.start_time_offset + (pygame.mixer.music.get_pos() / 1000.0)
+        new_pos = max(0, current_pos + seconds)
+        
+        self.start_time_offset = new_pos
+        pygame.mixer.music.play(start=new_pos)
+        
+        # Reset state for correct redraw
+        self.last_frame = ""
+        self.current_sub_idx = 0
 
     def _render_frame(self, current_time):
         """Find the active subtitle and render the terminal frame."""
