@@ -1,4 +1,5 @@
 import os
+import json
 from .utils import to_seconds
 
 def parse_srt(file_path):
@@ -31,9 +32,77 @@ def parse_srt(file_path):
                     subtitles.append({
                         'start': to_seconds(start_str),
                         'end': to_seconds(end_str),
-                        'text': text
+                        'text': text,
+                        'words': [] # No word level info in SRT
                     })
                 except Exception:
                     continue
 
     return subtitles
+
+def parse_json(file_path):
+    """
+    Parse word-level JSON lyrics and group them into lines.
+    """
+    if not os.path.exists(file_path):
+        return []
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            words = json.load(f)
+    except Exception as e:
+        print(f"Lỗi khi đọc file JSON: {e}")
+        return []
+
+    if not words:
+        return []
+
+    lines = []
+    current_line_words = []
+    
+    # Heuristics for grouping words into lines
+    max_gap = 0.8 # seconds
+    max_len = 60  # characters
+
+    for i, word_info in enumerate(words):
+        if not current_line_words:
+            current_line_words.append(word_info)
+            continue
+        
+        last_word = current_line_words[-1]
+        gap = word_info['start'] - last_word['end']
+        
+        current_text = ' '.join([w['word'] for w in current_line_words])
+        
+        # New line triggers
+        if gap > max_gap or len(current_text) + len(word_info['word']) + 1 > max_len:
+            # Save current line
+            lines.append({
+                'start': current_line_words[0]['start'],
+                'end': last_word['end'],
+                'text': current_text,
+                'words': current_line_words
+            })
+            current_line_words = [word_info]
+        else:
+            current_line_words.append(word_info)
+            
+    # Add last line
+    if current_line_words:
+        lines.append({
+            'start': current_line_words[0]['start'],
+            'end': current_line_words[-1]['end'],
+            'text': ' '.join([w['word'] for w in current_line_words]),
+            'words': current_line_words
+        })
+        
+    return lines
+
+def load_lyrics(file_path):
+    """
+    Generic lyric loader based on file extension.
+    """
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() == '.json':
+        return parse_json(file_path)
+    return parse_srt(file_path)

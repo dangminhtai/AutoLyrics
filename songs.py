@@ -1,17 +1,17 @@
 import os
-from core import parse_srt, LyricPlayer
+from core import load_lyrics, LyricPlayer
 
 # Configurations
 MUSIC_PATH = "assets/songs.mp3"
-LYRICS_PATH = "assets/lyrics.srt"
+LYRICS_PATH = "assets/lyrics.json"
 
 def main():
     # Load lyrics
     if not os.path.exists(LYRICS_PATH):
-        print(f"Không tìm thấy file subtitle: {LYRICS_PATH}")
+        print(f"Không tìm thấy file lyrics: {LYRICS_PATH}")
         return
 
-    subtitles = parse_srt(LYRICS_PATH)
+    subtitles = load_lyrics(LYRICS_PATH)
     if not subtitles:
         print("Dữ liệu subtitle trống hoặc sai định dạng.")
         return

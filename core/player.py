@@ -11,7 +11,7 @@ class LyricPlayer:
         self.subtitles = subtitles
         self.current_sub_idx = 0
         self.window_size = 5
-        self.cursor_char = "▌"
+        self.last_frame = "" # For dirty checking
 
     def play(self):
         """Start the music and the lyric rendering loop."""
@@ -23,15 +23,18 @@ class LyricPlayer:
         pygame.mixer.music.load(self.music_path)
         pygame.mixer.music.play()
 
-        start_time = time.time()
         clear_screen()
         hide_cursor()
 
         try:
             while pygame.mixer.music.get_busy():
-                current_time = time.time() - start_time
-                self._render_frame(current_time)
-                time.sleep(0.016)  # ~60 FPS
+                # get_pos is more reliable for staying in sync with audio
+                current_time = pygame.mixer.music.get_pos() / 1000.0
+                
+                if current_time >= 0:
+                    self._render_frame(current_time)
+                
+                time.sleep(0.01) # Faster update loop
         except KeyboardInterrupt:
             pygame.mixer.music.stop()
         finally:
@@ -43,7 +46,6 @@ class LyricPlayer:
         """Find the active subtitle and render the terminal frame."""
         # Find active index
         active_idx = -1
-        # Optimize: search from current index
         for i in range(self.current_sub_idx, len(self.subtitles)):
             sub = self.subtitles[i]
             if sub['start'] <= current_time <= sub['end']:
@@ -53,7 +55,6 @@ class LyricPlayer:
             elif sub['start'] > current_time:
                 break
         
-        # Fallback if no match found (e.g. rewind or gap)
         if active_idx == -1:
             for i, sub in enumerate(self.subtitles):
                 if sub['start'] <= current_time <= sub['end']:
@@ -61,35 +62,52 @@ class LyricPlayer:
                     self.current_sub_idx = i
                     break
 
-        # Rendering
-        move_to_top()
+        # Redraw logic with window calculation
         display_idx = active_idx if active_idx != -1 else self.current_sub_idx
         start_view = max(0, display_idx - 2)
         
-        output = []
+        output_lines = []
         for i in range(start_view, start_view + self.window_size):
             if i < len(self.subtitles):
                 sub = self.subtitles[i]
                 if i == active_idx:
-                    # Typing effect with fake cursor
-                    duration = max(sub['end'] - sub['start'], 0.001)
-                    elapsed = current_time - sub['start']
-                    progress = max(0.0, min(1.0, elapsed / duration))
+                    # Highlight words based on timing
+                    if sub.get('words'):
+                        num_chars = 0
+                        words_list = sub['words']
+                        for j, w in enumerate(words_list):
+                            if current_time >= w['end']:
+                                num_chars += len(w['word']) + (1 if j < len(words_list) - 1 else 0)
+                            elif current_time >= w['start']:
+                                word_dur = max(w['end'] - w['start'], 0.001)
+                                word_elapsed = current_time - w['start']
+                                word_prog = min(1.0, word_elapsed / word_dur)
+                                num_chars += int(len(w['word']) * word_prog)
+                                break
+                            else:
+                                break
+                    else:
+                        duration = max(sub['end'] - sub['start'], 0.001)
+                        elapsed = current_time - sub['start']
+                        progress = max(0.0, min(1.0, elapsed / duration))
+                        num_chars = int(len(sub['text']) * progress)
                     
-                    num_chars = int(len(sub['text']) * progress)
                     typed = sub['text'][:num_chars]
                     rem = sub['text'][num_chars:]
-                    
-                    line = f"{Fore.YELLOW}{typed}{self.cursor_char}{Style.DIM}{rem}{Style.RESET_ALL}\033[K"
-                    output.append(line)
+                    line = f"{Fore.YELLOW}{typed}{Style.DIM}{rem}{Style.RESET_ALL}\033[K"
                 elif i < display_idx:
-                    # Past lines
-                    output.append(f"{Fore.WHITE}{sub['text']}{Style.RESET_ALL}\033[K")
+                    line = f"{Fore.WHITE}{sub['text']}{Style.RESET_ALL}\033[K"
                 else:
-                    # Future lines
-                    output.append(f"{Style.DIM}{sub['text']}{Style.RESET_ALL}\033[K")
+                    line = f"{Style.DIM}{sub['text']}{Style.RESET_ALL}\033[K"
+                output_lines.append(line)
             else:
-                output.append('\033[K')
+                output_lines.append('\033[K')
 
-        sys.stdout.write('\n'.join(output) + '\n')
-        sys.stdout.flush()
+        current_frame_content = '\n'.join(output_lines)
+        
+        # Dirty checking: Only write to terminal if content actually changed
+        if current_frame_content != self.last_frame:
+            move_to_top()
+            sys.stdout.write(current_frame_content + '\n')
+            sys.stdout.flush()
+            self.last_frame = current_frame_content
