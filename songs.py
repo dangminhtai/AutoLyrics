@@ -4,7 +4,7 @@ import pygame
 import os
 from colorama import init, Fore, Style
 
-# Initialize colorama for Windows terminal support
+# Init
 init(autoreset=True)
 
 if sys.stdout.encoding != 'utf-8':
@@ -36,33 +36,36 @@ def parse_srt(file_path):
 
 
 def to_seconds(t):
-    # Handle both ":" and "," or "."
-    parts = t.replace(',', '.').split(':')
-    if len(parts) == 3:
-        h, m, s = parts
-        return int(h) * 3600 + int(m) * 60 + float(s)
-    return 0.0
+    h, m, s = t.replace(',', '.').split(':')
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def clear():
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 
 def play(subs):
     pygame.mixer.init()
+
     if not os.path.exists("assets/songs.mp3"):
-        print("Không tìm thấy file nhạc assets/songs.mp3")
+        print("Không tìm thấy file nhạc")
         return
-        
+
     pygame.mixer.music.load("assets/songs.mp3")
     pygame.mixer.music.play()
 
-    # Clear terminal screen and hide cursor
-    os.system('cls' if os.name == 'nt' else 'clear')
-    sys.stdout.write('\033[?25l') 
+    start_time = time.time()
+
+    clear()
+    sys.stdout.write('\033[?25l')  # hide cursor thật
     sys.stdout.flush()
-    
+
     try:
         current_sub_idx = 0
+
         while pygame.mixer.music.get_busy():
-            current_time = pygame.mixer.music.get_pos() / 1000.0
-            
+            current_time = time.time() - start_time
+
             active_idx = -1
             for i in range(current_sub_idx, len(subs)):
                 sub = subs[i]
@@ -72,73 +75,72 @@ def play(subs):
                     break
                 elif sub['start'] > current_time:
                     break
-            
-            if active_idx == -1 and current_time < subs[current_sub_idx]['start']:
+
+            if active_idx == -1:
                 for i, sub in enumerate(subs):
                     if sub['start'] <= current_time <= sub['end']:
                         active_idx = i
                         current_sub_idx = i
                         break
-                    elif sub['start'] > current_time:
-                        break
 
-            # Move cursor to top-left to redraw
+            # render
             sys.stdout.write('\033[H')
-            
+
             window_size = 5
             display_idx = active_idx if active_idx != -1 else current_sub_idx
             start_view = max(0, display_idx - 2)
-            
+
             output = []
-            cursor_pos = None
-            
+
             for i in range(start_view, start_view + window_size):
-                row_in_window = i - start_view
                 if i < len(subs):
                     sub = subs[i]
+
                     if i == active_idx:
-                        duration = sub['end'] - sub['start']
+                        duration = max(sub['end'] - sub['start'], 0.001)
                         elapsed = current_time - sub['start']
-                        progress = min(1.0, elapsed / (duration if duration > 0 else 0.1))
+                        progress = max(0.0, min(1.0, elapsed / duration))
+
                         num_chars = int(len(sub['text']) * progress)
-                        
+
                         typed = sub['text'][:num_chars]
                         rem = sub['text'][num_chars:]
-                        
-                        line = f"{Fore.YELLOW}{typed}{Style.DIM}{rem}{Style.RESET_ALL}\033[K"
+
+                        # cursor giả
+                        cursor_char = "▌"
+
+                        line = (
+                            f"{Fore.YELLOW}{typed}"
+                            f"{cursor_char}"
+                            f"{Style.DIM}{rem}"
+                            f"{Style.RESET_ALL}\033[K"
+                        )
                         output.append(line)
-                        # Save cursor position: row is 1-indexed, col is 1-indexed
-                        cursor_pos = (row_in_window + 1, num_chars + 1)
+
                     elif i < display_idx:
-                        line = f"{Fore.WHITE}{sub['text']}{Style.RESET_ALL}\033[K"
-                        output.append(line)
+                        output.append(f"{Fore.WHITE}{sub['text']}{Style.RESET_ALL}\033[K")
                     else:
-                        line = f"{Style.DIM}{sub['text']}{Style.RESET_ALL}\033[K"
-                        output.append(line)
+                        output.append(f"{Style.DIM}{sub['text']}{Style.RESET_ALL}\033[K")
                 else:
                     output.append('\033[K')
 
             sys.stdout.write('\n'.join(output) + '\n')
-            
-            # Move cursor to the typing position and show it
-            if cursor_pos:
-                sys.stdout.write(f'\033[{cursor_pos[0]};{cursor_pos[1]}H\033[?25h')
-            else:
-                sys.stdout.write('\033[?25l') # Hide if no active sub
-                
             sys.stdout.flush()
+
             time.sleep(0.016)
 
     except KeyboardInterrupt:
         pygame.mixer.music.stop()
-        # Show cursor and clean up
-        sys.stdout.write('\033[?25h')
-        os.system('cls' if os.name == 'nt' else 'clear')
+
+    finally:
+        sys.stdout.write('\033[?25h')  # restore cursor
+        clear()
         print(Fore.RED + "Đã dừng.")
+
 
 if __name__ == "__main__":
     if os.path.exists("assets/lyrics.srt"):
         subs = parse_srt("assets/lyrics.srt")
         play(subs)
     else:
-        print("Không tìm thấy file subtitle assets/lyrics.srt")
+        print("Không tìm thấy subtitle")
