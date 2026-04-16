@@ -53,65 +53,88 @@ def play(subs):
     pygame.mixer.music.load("assets/songs.mp3")
     pygame.mixer.music.play()
 
-    # Clear terminal screen
+    # Clear terminal screen and hide cursor
     os.system('cls' if os.name == 'nt' else 'clear')
+    sys.stdout.write('\033[?25l') 
+    sys.stdout.flush()
     
     try:
-        current_sub_idx = -1
+        current_sub_idx = 0
         while pygame.mixer.music.get_busy():
             current_time = pygame.mixer.music.get_pos() / 1000.0
             
-            # Find the active subtitle index
             active_idx = -1
-            for i, sub in enumerate(subs):
+            for i in range(current_sub_idx, len(subs)):
+                sub = subs[i]
                 if sub['start'] <= current_time <= sub['end']:
                     active_idx = i
+                    current_sub_idx = i
                     break
                 elif sub['start'] > current_time:
                     break
             
-            # Only redraw if time has passed or index changed to minimize flicker
+            if active_idx == -1 and current_time < subs[current_sub_idx]['start']:
+                for i, sub in enumerate(subs):
+                    if sub['start'] <= current_time <= sub['end']:
+                        active_idx = i
+                        current_sub_idx = i
+                        break
+                    elif sub['start'] > current_time:
+                        break
+
             # Move cursor to top-left to redraw
             sys.stdout.write('\033[H')
             
-            # Show a window of lyrics (e.g., 2 previous, current, 2 next)
             window_size = 5
-            start_view = max(0, active_idx - 2) if active_idx != -1 else max(0, current_sub_idx - 2)
+            display_idx = active_idx if active_idx != -1 else current_sub_idx
+            start_view = max(0, display_idx - 2)
+            
+            output = []
+            cursor_pos = None
             
             for i in range(start_view, start_view + window_size):
+                row_in_window = i - start_view
                 if i < len(subs):
                     sub = subs[i]
                     if i == active_idx:
-                        # Typing effect for active line
                         duration = sub['end'] - sub['start']
                         elapsed = current_time - sub['start']
-                        progress = min(1.0, elapsed / duration)
+                        progress = min(1.0, elapsed / (duration if duration > 0 else 0.1))
                         num_chars = int(len(sub['text']) * progress)
                         
                         typed = sub['text'][:num_chars]
                         rem = sub['text'][num_chars:]
                         
-                        # Current line: Yellow for typed part, Dim for remaining
-                        sys.stdout.write(f"{Fore.YELLOW}{typed}{Style.DIM}{rem}{Style.RESET_ALL}\033[K\n")
-                    elif i < active_idx or (active_idx == -1 and i <= current_sub_idx):
-                        # Past lines: White
-                        sys.stdout.write(f"{Fore.WHITE}{sub['text']}{Style.RESET_ALL}\033[K\n")
+                        line = f"{Fore.YELLOW}{typed}{Style.DIM}{rem}{Style.RESET_ALL}\033[K"
+                        output.append(line)
+                        # Save cursor position: row is 1-indexed, col is 1-indexed
+                        cursor_pos = (row_in_window + 1, num_chars + 1)
+                    elif i < display_idx:
+                        line = f"{Fore.WHITE}{sub['text']}{Style.RESET_ALL}\033[K"
+                        output.append(line)
                     else:
-                        # Future lines: Dim
-                        sys.stdout.write(f"{Style.DIM}{sub['text']}{Style.RESET_ALL}\033[K\n")
+                        line = f"{Style.DIM}{sub['text']}{Style.RESET_ALL}\033[K"
+                        output.append(line)
                 else:
-                    # Empty line to maintain window size
-                    sys.stdout.write('\033[K\n')
+                    output.append('\033[K')
 
-            if active_idx != -1:
-                current_sub_idx = active_idx
+            sys.stdout.write('\n'.join(output) + '\n')
+            
+            # Move cursor to the typing position and show it
+            if cursor_pos:
+                sys.stdout.write(f'\033[{cursor_pos[0]};{cursor_pos[1]}H\033[?25h')
+            else:
+                sys.stdout.write('\033[?25l') # Hide if no active sub
                 
             sys.stdout.flush()
-            time.sleep(0.01)
+            time.sleep(0.016)
 
     except KeyboardInterrupt:
         pygame.mixer.music.stop()
-        print("\n\n" + Fore.RED + "Đã dừng.")
+        # Show cursor and clean up
+        sys.stdout.write('\033[?25h')
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print(Fore.RED + "Đã dừng.")
 
 if __name__ == "__main__":
     if os.path.exists("assets/lyrics.srt"):
