@@ -125,11 +125,11 @@ class LyricPlayer:
         
         output_lines = [""] # Header spacing
         
+        # 1. First, prepare all lines with their prefixes
+        window_lines = []
         for i in range(start_view, start_view + self.window_size):
             if i < len(self.subtitles):
                 sub = self.subtitles[i]
-                
-                # Prefix based on active status
                 prefix = f"{CONFIG.COLOR_INDICATOR}{CONFIG.ACTIVE_INDICATOR}{Style.RESET_ALL}" if i == active_idx else "  "
                 
                 if i == active_idx:
@@ -161,12 +161,25 @@ class LyricPlayer:
                 else:
                     line_content = f"{CONFIG.COLOR_FUTURE}{sub['text']}{Style.RESET_ALL}"
                 
-                full_line = f"{prefix}{line_content}"
-                visible_width = get_visible_width(full_line)
-                padding = max(0, (term_width - visible_width) // 2)
-                output_lines.append(" " * padding + full_line + "\033[K")
+                window_lines.append(f"{prefix}{line_content}")
             else:
-                output_lines.append('\033[K')
+                window_lines.append("")
+
+        # 2. Find max visible width of the current window to center the entire "block"
+        max_visible_width = 0
+        for line in window_lines:
+            if line:
+                max_visible_width = max(max_visible_width, get_visible_width(line))
+        
+        block_padding = max(0, (term_width - max_visible_width) // 2)
+
+        # 3. Assemble output lines with uniform padding
+        output_lines = [""]
+        for line in window_lines:
+            if line:
+                output_lines.append(" " * block_padding + line + "\033[K")
+            else:
+                output_lines.append("\033[K")
 
         # Add Progress Bar
         output_lines.append("")

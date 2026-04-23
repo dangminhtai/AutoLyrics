@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from .utils import to_seconds
 from .config import CONFIG
 
@@ -17,21 +18,31 @@ def parse_srt(file_path):
         print(f"{CONFIG.COLOR_ERROR}Lỗi khi đọc file srt: {e}")
         return []
 
-    blocks = content.strip().split('\n\n')
+    # Split by one or more blank lines
+    blocks = re.split(r'\n\s*\n', content.strip())
     subtitles = []
 
     for block in blocks:
-        lines = block.strip().split('\n')
+        lines = [line.strip() for line in block.strip().split('\n') if line.strip()]
         if len(lines) >= 3:
-            time_line = lines[1]
-            text = ' '.join(lines[2:])
-
-            if ' --> ' in time_line:
+            # Lines might look like: ["1", "00:00:01,200 --> 00:00:03,000", "Text..."]
+            # But sometimes the index is missing or there's other junk.
+            # We look for the line containing ' --> '
+            time_line = ""
+            text_start_idx = 2
+            for i, line in enumerate(lines):
+                if ' --> ' in line:
+                    time_line = line
+                    text_start_idx = i + 1
+                    break
+            
+            if time_line:
                 try:
                     start_str, end_str = time_line.split(' --> ')
+                    text = ' '.join(lines[text_start_idx:])
                     subtitles.append({
-                        'start': to_seconds(start_str),
-                        'end': to_seconds(end_str),
+                        'start': to_seconds(start_str.strip()),
+                        'end': to_seconds(end_str.strip()),
                         'text': text,
                         'words': [] 
                     })

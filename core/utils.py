@@ -9,9 +9,15 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
 def to_seconds(t):
-    """Convert SRT timestamp format to total seconds."""
-    h, m, s = t.replace(',', '.').split(':')
-    return int(h) * 3600 + int(m) * 60 + float(s)
+    """Convert SRT timestamp format (HH:MM:SS,mmm) to total seconds."""
+    parts = t.replace(',', '.').strip().split(':')
+    if len(parts) == 3:
+        h, m, s = parts
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    elif len(parts) == 2:
+        m, s = parts
+        return int(m) * 60 + float(s)
+    return float(parts[0])
 
 def clear_screen():
     """Clear terminal screen."""

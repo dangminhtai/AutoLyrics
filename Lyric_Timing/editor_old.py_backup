@@ -1,0 +1,409 @@
+import os
+import json
+import tkinter as tk
+from tkinter import ttk, messagebox
+import pygame
+
+# Default paths relative to this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+JSON_PATH = os.path.join(PROJECT_DIR, "assets", "lyrics.json")
+MP3_PATH = os.path.join(PROJECT_DIR, "assets", "songs.mp3")
+
+class LyricEditorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Lyric Timing Editor")
+        self.root.geometry("900x700")
+
+        self.lyrics_data = []
+        self.current_index = None
+
+        # Playback tracking
+        self.audio_offset = 0.0
+        self.is_paused = False
+        self.silent_select = False
+        self.play_until = None
+        
+        # Flags
+        self.flag_a = None
+        self.flag_b = None
+        self.loop_enabled = tk.BooleanVar(value=False)
+
+        # Init pygame
+        pygame.mixer.init()
+        if os.path.exists(MP3_PATH):
+            pygame.mixer.music.load(MP3_PATH)
+        else:
+            messagebox.showwarning("Warning", f"MP3 not found:\n{MP3_PATH}")
+
+        self.setup_ui()
+        self.load_data()
+        self.update_loop()
+
+    def setup_ui(self):
+        # Top toolbar
+        toolbar = tk.Frame(self.root)
+        toolbar.pack(fill=tk.X, padx=5, pady=5)
+
+        tk.Button(toolbar, text="Load JSON", command=self.load_data).pack(side=tk.LEFT, padx=2)
+        tk.Button(toolbar, text="Save JSON", bg="lightgreen", command=self.save_data).pack(side=tk.LEFT, padx=2)
+        tk.Label(toolbar, text=" | ").pack(side=tk.LEFT)
+        tk.Button(toolbar, text="Play Start (0.0s)", command=self.play_from_start).pack(side=tk.LEFT, padx=2)
+        tk.Button(toolbar, text="Stop Audio", command=self.stop_audio).pack(side=tk.LEFT, padx=2)
+        tk.Label(toolbar, text=" | ").pack(side=tk.LEFT)
+        
+        # Flag section
+        self.lbl_flag = tk.Label(toolbar, text="A: -- | B: --", fg="blue")
+        self.lbl_flag.pack(side=tk.LEFT, padx=5)
+        tk.Checkbutton(toolbar, text="Loop A-B", variable=self.loop_enabled).pack(side=tk.LEFT)
+        tk.Button(toolbar, text="Clear Flags", command=self.clear_flags).pack(side=tk.LEFT, padx=2)
+
+        # Global bindings
+        self.root.bind("<space>", self.toggle_play_pause)
+        self.root.bind("f", self.jump_to_closest)
+        self.root.bind("F", self.jump_to_closest)
+        self.root.bind("[", self.set_flag_a)
+        self.root.bind("]", self.set_flag_b)
+
+        # Live Preview Panel
+        preview_frame = tk.LabelFrame(self.root, text="Live Preview (SPACE: Play/Pause | F: Jump | [ ]: Flags A/B)", bg="#2b2b2b", fg="white")
+        preview_frame.pack(fill=tk.X, padx=5, pady=5, side=tk.BOTTOM)
+        
+        self.lbl_time = tk.Label(preview_frame, text="0.000s", font=("Consolas", 14), bg="#2b2b2b", fg="yellow")
+        self.lbl_time.pack(pady=2)
+
+        self.txt_preview = tk.Text(preview_frame, height=1, width=60, font=("Helvetica", 18, "bold"), bg="#2b2b2b", fg="cyan", borderwidth=0, highlightthickness=0)
+        self.txt_preview.pack(pady=10)
+        self.txt_preview.tag_configure("center", justify='center')
+        self.txt_preview.tag_configure("normal", foreground="gray")
+        self.txt_preview.tag_configure("bracket", foreground="white")
+        self.txt_preview.tag_configure("active", foreground="yellow")
+
+        # Edit Panel
+        edit_frame = tk.LabelFrame(self.root, text="Edit Selected Word")
+        edit_frame.pack(fill=tk.X, padx=5, pady=5, side=tk.BOTTOM)
+
+        self.lbl_word = tk.Label(edit_frame, text="Word: ---", font=("Helvetica", 14, "bold"))
+        self.lbl_word.grid(row=0, column=0, columnspan=5, pady=5, sticky=tk.W)
+
+        tk.Label(edit_frame, text="Start:").grid(row=1, column=0, padx=5)
+        tk.Button(edit_frame, text="-0.1", command=lambda: self.adjust_time('start', -0.1)).grid(row=1, column=1)
+        self.var_start = tk.StringVar()
+        self.ent_start = tk.Entry(edit_frame, textvariable=self.var_start, width=10)
+        self.ent_start.grid(row=1, column=2, padx=5)
+        tk.Button(edit_frame, text="+0.1", command=lambda: self.adjust_time('start', 0.1)).grid(row=1, column=3)
+        
+        play_frame = tk.Frame(edit_frame)
+        play_frame.grid(row=1, column=4, padx=10, sticky=tk.W)
+        tk.Button(play_frame, text="Play from Start", command=self.play_segment).pack(side=tk.LEFT, padx=2)
+        tk.Button(play_frame, text="Play Word Only", command=lambda: self.play_segment(isolated=True)).pack(side=tk.LEFT)
+
+        tk.Label(edit_frame, text="End:").grid(row=2, column=0, padx=5, pady=5)
+        tk.Button(edit_frame, text="-0.1", command=lambda: self.adjust_time('end', -0.1)).grid(row=2, column=1)
+        self.var_end = tk.StringVar()
+        self.ent_end = tk.Entry(edit_frame, textvariable=self.var_end, width=10)
+        self.ent_end.grid(row=2, column=2, padx=5)
+        tk.Button(edit_frame, text="+0.1", command=lambda: self.adjust_time('end', 0.1)).grid(row=2, column=3)
+
+        tk.Button(edit_frame, text="Apply Typed Values to Table", command=self.apply_entry).grid(row=2, column=4, padx=10, sticky=tk.W)
+
+        # Treeview (Table)
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        columns = ("#", "Word", "Start", "End")
+        # Extended selection mode for multiple selections
+        self.tree = ttk.Treeview(main_frame, columns=columns, show="headings", selectmode="extended")
+        self.tree.heading("#", text="Index")
+        self.tree.heading("Word", text="Word")
+        self.tree.heading("Start", text="Start Time (s)")
+        self.tree.heading("End", text="End Time (s)")
+
+        self.tree.column("#", width=50, anchor=tk.CENTER)
+        self.tree.column("Word", width=300)
+        self.tree.column("Start", width=100, anchor=tk.CENTER)
+        self.tree.column("End", width=100, anchor=tk.CENTER)
+
+        # Configure visual tag for A-B Loop highlights
+        self.tree.tag_configure('highlight', background='#4a90e2', foreground='white')
+
+        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+
+    def load_data(self):
+        if not os.path.exists(JSON_PATH):
+            messagebox.showerror("Error", f"Could not find JSON file:\n{JSON_PATH}")
+            return
+        
+        try:
+            with open(JSON_PATH, "r", encoding="utf-8") as f:
+                self.lyrics_data = json.load(f)
+            for row in self.tree.get_children():
+                self.tree.delete(row)
+            for i, item in enumerate(self.lyrics_data):
+                self.tree.insert("", tk.END, iid=str(i), values=(
+                    i, item.get('word', ''), round(item.get('start', 0), 3), round(item.get('end', 0), 3)
+                ))
+            self.refresh_highlights()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load JSON:\n{e}")
+
+    # Hotkey functions
+    def is_in_entry(self):
+        return isinstance(self.root.focus_get(), tk.Entry)
+
+    def toggle_play_pause(self, event=None):
+        if self.is_in_entry(): return
+        if self.is_paused:
+            pygame.mixer.music.unpause()
+            self.is_paused = False
+        else:
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.pause()
+                self.is_paused = True
+            else:
+                self.play_segment()
+        return "break"
+
+    def jump_to_closest(self, event=None):
+        if self.is_in_entry(): return
+        if not self.lyrics_data: return
+        
+        pos = pygame.mixer.music.get_pos()
+        c_time = self.audio_offset + (pos / 1000.0) if pos != -1 else self.audio_offset
+
+        closest_idx = 0
+        min_diff = float('inf')
+        for i, item in enumerate(self.lyrics_data):
+            diff = abs(item['start'] - c_time)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = i
+
+        self.silent_select = True
+        self.tree.selection_set(str(closest_idx))
+        self.tree.focus(str(closest_idx))
+        self.tree.see(str(closest_idx))
+        return "break"
+
+    def set_flag_a(self, event=None):
+        if self.is_in_entry(): return
+        pos = pygame.mixer.music.get_pos()
+        if pos != -1 or self.is_paused:
+            self.flag_a = round(self.audio_offset + (pos / 1000.0), 3)
+        self.update_flag_lbl()
+        return "break"
+
+    def set_flag_b(self, event=None):
+        if self.is_in_entry(): return
+        pos = pygame.mixer.music.get_pos()
+        if pos != -1 or self.is_paused:
+            self.flag_b = round(self.audio_offset + (pos / 1000.0), 3)
+        self.update_flag_lbl()
+        return "break"
+
+    def clear_flags(self):
+        self.flag_a = None
+        self.flag_b = None
+        self.update_flag_lbl()
+
+    def update_flag_lbl(self):
+        a_txt = f"{self.flag_a}s" if self.flag_a is not None else "--"
+        b_txt = f"{self.flag_b}s" if self.flag_b is not None else "--"
+        self.lbl_flag.config(text=f"A: {a_txt} | B: {b_txt}")
+        self.refresh_highlights()
+
+    def refresh_highlights(self):
+        """Color background of items within flag bounds."""
+        if self.flag_a is None or self.flag_b is None:
+            for i in range(len(self.lyrics_data)):
+                try: self.tree.item(str(i), tags=())
+                except: pass
+            return
+            
+        for i, item in enumerate(self.lyrics_data):
+            try:
+                # Add tiny epsilon to avoid floating point issues
+                if item.get('end', 0) > self.flag_a - 0.01 and item.get('start', 0) < self.flag_b + 0.01:
+                    self.tree.item(str(i), tags=('highlight',))
+                else:
+                    self.tree.item(str(i), tags=())
+            except: pass
+
+    # UI updates & callbacks
+    def on_select(self, event):
+        selected = self.tree.selection()
+        if not selected: return
+        
+        # Multiple Selection handling
+        if len(selected) > 1:
+            try:
+                # The user shift/ctrl clicked multiple rows.
+                # We'll automatically set Flag A and Flag B covering the entire selection.
+                sorted_selected = sorted([int(x) for x in selected])
+                first_idx = sorted_selected[0]
+                last_idx = sorted_selected[-1]
+                
+                self.flag_a = round(self.lyrics_data[first_idx].get('start', 0.0), 3)
+                self.flag_b = round(self.lyrics_data[last_idx].get('end', 0.0), 3)
+                
+                # Turn loop on and refresh display
+                self.loop_enabled.set(True)
+                self.update_flag_lbl()
+                
+                self.current_index = first_idx # Keep focus on first item for the Edit Panel
+            except: pass
+        else:
+            self.current_index = int(selected[0])
+
+        idx = self.current_index
+        item = self.lyrics_data[idx]
+
+        self.lbl_word.config(text=f"Word: {item.get('word', '')}")
+        self.var_start.set(str(round(item.get('start', 0.0), 3)))
+        self.var_end.set(str(round(item.get('end', 0.0), 3)))
+
+        if not getattr(self, 'silent_select', False):
+            self.play_segment()
+        self.silent_select = False
+
+    def play_from_start(self):
+        self.audio_offset = 0.0
+        self.is_paused = False
+        try: pygame.mixer.music.play(start=0.0)
+        except Exception: pass
+
+    def play_segment(self, isolated=False):
+        if self.current_index is None: start_t = 0.0
+        else: start_t = self.lyrics_data[self.current_index].get('start', 0)
+        
+        self.audio_offset = start_t
+        self.is_paused = False
+        
+        if isolated and self.current_index is not None:
+             self.play_until = self.lyrics_data[self.current_index].get('end', 0)
+        else:
+             self.play_until = None
+             
+        try: pygame.mixer.music.play(start=start_t)
+        except Exception: pass
+
+    def stop_audio(self):
+        pygame.mixer.music.stop()
+        self.is_paused = False
+        self.lbl_time.config(text="0.000 s")
+        self.txt_preview.config(state=tk.NORMAL)
+        self.txt_preview.delete("1.0", tk.END)
+        self.txt_preview.insert(tk.END, "---", "normal")
+        self.txt_preview.tag_add("center", "1.0", "end")
+        self.txt_preview.config(state=tk.DISABLED)
+
+    def adjust_time(self, key, amount):
+        if self.current_index is None: return
+        
+        current_val = self.lyrics_data[self.current_index].get(key, 0.0)
+        new_val = max(0.0, current_val + amount)
+        self.lyrics_data[self.current_index][key] = round(new_val, 3)
+        
+        if key == 'start':
+            self.var_start.set(str(self.lyrics_data[self.current_index][key]))
+            self.silent_select = True
+            self.play_segment()
+        else:
+            self.var_end.set(str(self.lyrics_data[self.current_index][key]))
+            
+        self.update_tree_row()
+
+    def apply_entry(self):
+        if self.current_index is None: return
+        try:
+            s_val = float(self.var_start.get())
+            e_val = float(self.var_end.get())
+            self.lyrics_data[self.current_index]['start'] = round(s_val, 3)
+            self.lyrics_data[self.current_index]['end'] = round(e_val, 3)
+            self.update_tree_row()
+        except ValueError:
+            messagebox.showerror("Error", "Invalid numeric value")
+
+    def update_tree_row(self):
+        idx = self.current_index
+        item = self.lyrics_data[idx]
+        self.tree.item(str(idx), values=(
+            idx, item.get('word',''), round(item['start'], 3), round(item['end'], 3)
+        ))
+        
+        # In case the new timing breaks or enters loop logic, resync highlight
+        self.refresh_highlights()
+
+    def save_data(self):
+        if not self.lyrics_data: return
+        try:
+            with open(JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.lyrics_data, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("Success", "Saved successfully to lyrics.json!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save:\n{e}")
+
+    def update_loop(self):
+        pos = pygame.mixer.music.get_pos()
+        if (pos != -1 or self.is_paused) and self.lyrics_data:
+            current_time = self.audio_offset + (pos / 1000.0) if pos != -1 else self.audio_offset
+            
+            # Isolated play checker
+            if hasattr(self, 'play_until') and self.play_until is not None:
+                if current_time >= self.play_until:
+                    pygame.mixer.music.pause()
+                    self.is_paused = True
+                    current_time = self.play_until
+                    self.play_until = None
+            
+            # 1. AB Loop Checker
+            if self.loop_enabled.get() and self.flag_a is not None and self.flag_b is not None:
+                if current_time >= self.flag_b:
+                    self.audio_offset = self.flag_a
+                    try: pygame.mixer.music.play(start=self.flag_a)
+                    except: pass
+                    current_time = self.flag_a
+
+            self.lbl_time.config(text=f"{current_time:.3f} s")
+            
+            # 2. Preview Updates
+            active_idx = -1
+            for i, item in enumerate(self.lyrics_data):
+                if item['start'] <= current_time <= item['end']:
+                    active_idx = i
+                    break
+            
+            self.txt_preview.config(state=tk.NORMAL)
+            self.txt_preview.delete("1.0", tk.END)
+            
+            if active_idx != -1:
+                start_i = max(0, active_idx - 5)
+                end_i = min(len(self.lyrics_data), active_idx + 6)
+                
+                for i in range(start_i, end_i):
+                    w = self.lyrics_data[i].get('word', '')
+                    if i == active_idx:
+                        self.txt_preview.insert(tk.END, "[", "bracket")
+                        self.txt_preview.insert(tk.END, w, "active")
+                        self.txt_preview.insert(tk.END, "] ", "bracket")
+                    else:
+                        self.txt_preview.insert(tk.END, w + " ", "normal")
+            else:
+                self.txt_preview.insert(tk.END, "...", "normal")
+
+            self.txt_preview.tag_add("center", "1.0", "end")
+            self.txt_preview.config(state=tk.DISABLED)
+        
+        self.root.after(50, self.update_loop)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = LyricEditorApp(root)
+    root.mainloop()
